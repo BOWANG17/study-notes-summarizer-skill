@@ -10,6 +10,7 @@
 
 - **多格式解析**：`.docx` / `.doc` / `.pdf`（文本型与扫描型）/ `.pptx` / 图片，统一转成 Markdown。
 - **全免费本地引擎**：`python-docx`、`macOS textutil`、`pdfplumber`、`python-pptx`、`tesseract OCR`、`img2pdf`——不联网、不按量计费。
+- **自动出 Word，不依赖 WorkBuddy**：`scripts/build_docx.py` 用 python-docx 把总结自动渲染成 `.docx`，AI 跑完分类直接调用，**用户零命令**；任何能跑 Python 的 AI 工具（WorkBuddy / Cursor / Claude Code 等）都能用。
 - **按月聚合**：文件名带 `x.xx`（如 `7.14`、`8.16`）的笔记自动归入对应月份总结。
 - **六板块智能分类**：`单词词汇 / 语法 / 听 / 说 / 读 / 写`，某板块源材料没有内容就**整段省略**。
 - **⚠️ 易错标注**：自动抓取原文中的错误，集中标出供考前避坑。
@@ -23,10 +24,12 @@
 study-notes-summarizer/
 ├── SKILL.md              # Skill 定义：触发条件、完整流水线、参数说明
 ├── scripts/
-│   └── parse_notes.py    # 统一免费解析脚本（多格式 → Markdown）
+│   ├── parse_notes.py    # 统一免费解析脚本（多格式 → Markdown）
+│   └── build_docx.py     # Markdown 总结 → Word 渲染器（python-docx，自动出 .docx）
 ├── references/
 │   ├── section_guide.md  # 六板块分类规则与智能解析约定
 │   └── summary_prompt.md # 总结生成提示词模板
+├── requirements.txt      # Python 依赖一览
 ├── LICENSE               # MIT 许可证
 └── README.md             # 本文件
 ```
@@ -37,6 +40,8 @@ study-notes-summarizer/
 
 ```bash
 pip install python-docx pdfplumber python-pptx img2pdf pytesseract
+# 或一键装本仓库列出的依赖：
+pip install -r requirements.txt
 ```
 
 - **`.doc` / 老 `.ppt` 解析**依赖 macOS 自带 `textutil`（仅 macOS；其他平台请先转成 `.docx` / `.pptx`）。
@@ -44,7 +49,7 @@ pip install python-docx pdfplumber python-pptx img2pdf pytesseract
   - macOS：`brew install tesseract poppler`
   - 无 brew 时见 [tesseract 官网](https://github.com/tesseract-ocr/tesseract) 下载安装包
   - 缺这两者时，图片/扫描 PDF 会被跳过并提示，其余格式不受影响。
-- 最终 `.docx` 渲染依赖内置 **tencent-docx** skill（WorkBuddy 自带，始终可用）。
+- 最终 `.docx` 渲染用 `scripts/build_docx.py`（python-docx），**不依赖 WorkBuddy 内置 skill**，任何能跑 Python 的 AI 工具都能自动出 Word。
 
 若某库缺失，脚本运行时会打印明确的 `pip install` 提示，不会静默失败。
 
@@ -68,7 +73,7 @@ cp -r study-notes-summarizer ~/.workbuddy/skills/
 
 1. 把笔记原文件放进任意一个本地文件夹（例如 `~/Desktop/我的笔记`）。
 2. 对 WorkBuddy 说：*"用 study-notes-summarizer 整理 `~/Desktop/我的笔记`，科目是德语 B1"*。
-3. Skill 会自动：解析 → 按月聚合 → 六板块分类 → 用 tencent-docx 生成 `final/{月份}笔记总结.docx`。
+3. Skill 会自动：解析 → 按月聚合 → 六板块分类 → 用 `build_docx.py` 自动生成 `final/{月份}笔记总结.docx`（用户零命令）。
 
 **只想跑解析脚本**（命令行）：
 
@@ -88,6 +93,18 @@ python3 scripts/parse_notes.py \
 | `--log` | `processed.log` 路径 | `<out>/processed.log` |
 | `--force` | 忽略 `processed.log`，强制重解析全部 | 关 |
 
+## 在其他 AI 工具里用（无需 WorkBuddy）
+
+本 skill 的 Word 生成已改用 `scripts/build_docx.py`（python-docx），**不依赖 WorkBuddy 内置的 tencent-docx**。
+因此在任何能读文件 + 跑命令的 AI 工具里都能跑通整条流水线：
+
+1. 把本仓库放到该工具能访问的目录（WorkBuddy 是 `~/.workbuddy/skills/`，其他工具随意）。
+2. 让 AI 读 `SKILL.md` + `references/*.md` 了解流程与提示词。
+3. AI 执行：`parse_notes.py` 解析 → 按 `summary_prompt.md` 做六板块分类（产出 Markdown）→ `build_docx.py` 自动出 `.docx`。
+
+支持的工具示例：**WorkBuddy、Cursor、Claude Code、Cline、aider** 等任何带终端执行能力的 AI 助手。
+（纯网页版 ChatGPT/Claude 无法跑本地脚本，需配合上述带终端的工具。）
+
 ## 参数 / 配置
 
 | 参数 | 说明 | 默认 |
@@ -102,7 +119,7 @@ python3 scripts/parse_notes.py \
 ```
 投喂文件夹 → parse_notes.py 解析为 Markdown
            → AI 按月份(x.xx)聚合 + 六板块分类
-           → tencent-docx 渲染为 .docx
+           → build_docx.py 自动渲染为 .docx（python-docx，不依赖 WorkBuddy）
            → 每天可由自动化定时重跑（增量）
 ```
 

@@ -13,7 +13,7 @@ agent_created: true
 
 - 输入：一个本地文件夹，里面是用户的笔记原文件（`.docx` / `.doc` / `.pdf` / 图片 / `.pptx`）。
 - 处理：① 统一解析成 Markdown → ② 按月份（`x.xx` 文件名）聚合 → ③ 按六板块智能分类 →
-  ④ 用 tencent-docx 渲染成排版好的 `.docx`。
+  ④ 用 `scripts/build_docx.py`（python-docx）**自动**渲染成排版好的 `.docx`。
 - 输出：`final/{月份}笔记总结.docx`，以及无日期素材的 `final/{科目}基础素材提炼.docx`。
 
 ## When To Use
@@ -50,10 +50,20 @@ python3 scripts/parse_notes.py --source "源文件夹" --out "工作区/parsed" 
 - 抓原文错误做 ⚠️ 易错标注。
 - 无日期的通用素材单独成《基础素材提炼》文档（除非用户指定编入某月）。
 
-### Step 4 — 渲染 Word（tencent-docx）
-把 Step 3 的 Markdown 交给内置 **tencent-docx** skill（tdoc-orchestrator），
-走 S1 创作 → S2 美化 → S3 转 docx，输出 `final/{月份}笔记总结.docx`。
-词汇表用表格、⚠️易错用底纹卡片。
+### Step 4 — 渲染 Word（自动，python-docx，不依赖 WorkBuddy）
+Step 3 产出结构化 Markdown 后，**AI 直接执行**下面的命令把它渲染成 `.docx`，
+用户无需敲任何命令：
+```bash
+python3 scripts/build_docx.py \
+  --input  "工作区/summaries/{月份}.md" \
+  --output "工作区/final/{月份}笔记总结.docx"
+```
+- `build_docx.py` 用 **python-docx** 渲染：H1→标题、H2/H3→标题样式、列表/表格/引用块、
+  `**粗体**`/`*斜体*`/`` `代码` `` 内联格式；**⚠️ 易错小节整段标黄高亮**。
+- **不再依赖 WorkBuddy 内置 tencent-docx**——只要有 Python + python-docx，任何 AI 工具
+  （WorkBuddy / Cursor / Claude Code 等）跑完分类都能自动出 Word。
+- 若用户环境里 WorkBuddy 的 tencent-docx 可用且想要更精美排版，可改走 tencent-docx；
+  默认走 build_docx.py 以保证可移植。
 
 ### Step 5 — 记录与交付
 - 更新项目的 `processed.log`（脚本自动完成）与记忆（哪些月已生成、哪些待补）。
@@ -78,7 +88,8 @@ pip install python-docx pdfplumber python-pptx img2pdf pytesseract
 - **图片 / 扫描 PDF 的 OCR** 需要系统安装 `tesseract` + `poppler`：
   `brew install tesseract poppler`（无 brew 时见 tesseract 官网下载安装包）。
   缺此二者时，图片/扫描 PDF 会被跳过并提示，其余格式不受影响。
-- 最终 `.docx` 渲染依赖内置 **tencent-docx** skill（始终可用）。
+- 最终 `.docx` 渲染用 `scripts/build_docx.py`（python-docx），**不依赖 WorkBuddy 内置 skill**，
+  任何能跑 Python 的 AI 工具都能自动出 Word。
 
 若某库缺失，脚本运行时会打印明确的 `pip install` 提示，不会静默失败。
 

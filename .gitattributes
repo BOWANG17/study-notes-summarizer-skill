@@ -1,0 +1,17 @@
+# Normalize every text file to LF in the repo, and keep LF on checkout
+# everywhere (macOS + Windows). Prevents the classic Windows CRLF breakage
+# that corrupts Python scripts and shell files across machines.
+* text=auto eol=lf
+
+# Force LF explicitly for source/config so behavior is identical per-OS
+*.py text eol=lf
+*.sh text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Binary assets: never touch line endings
+*.zip binary
+*.png binary
+*.jpg binary
+*.pdf binary

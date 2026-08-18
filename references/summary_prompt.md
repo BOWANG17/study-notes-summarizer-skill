@@ -42,9 +42,14 @@
 ```
 
 ## 转为 Word 文档
-把上面这份 Markdown 交给 **tencent-docx** skill（tdoc-orchestrator）走 S1→S2→S3 流水线，
-产出排版干净、带页码的 `.docx`。词汇表用表格呈现，⚠️易错用底纹卡片呈现。
-输出路径约定：`final/{月份}笔记总结.docx`（如 `final/7月笔记总结.docx`）。
+把上面这份 Markdown 用 `scripts/build_docx.py` 渲染成 `.docx`（AI 自动执行，用户无需敲命令）：
+```bash
+python3 scripts/build_docx.py --input summaries/{月份}.md --output final/{月份}笔记总结.docx
+```
+- 用 python-docx 渲染：标题层级、列表、表格、`**粗体**`/`*斜体*` 内联；
+  **⚠️ 易错小节整段标黄高亮**，醒目便于考前避坑。
+- **不依赖 WorkBuddy 内置 skill**，任何能跑 Python 的 AI 工具都能出 Word。
+- 输出路径约定：`final/{月份}笔记总结.docx`（如 `final/7月笔记总结.docx`）。
 
 ## 无日期文件的单独提炼
 若本批包含无日期的通用素材，单独产出 `final/{科目}基础素材提炼.docx`，

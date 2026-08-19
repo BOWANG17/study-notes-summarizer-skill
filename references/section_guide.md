@@ -1,30 +1,35 @@
-# 六板块总结结构定义
+# Six-Section Summary Structure
 
-本 skill 把任意科目的笔记，统一整理为以下六个板块。模型在生成每一份月度/主题总结时，
-**只输出该月/该批笔记中确实存在的板块；没有相关内容的板块直接不写**，避免凑数。
+This skill unifies notes from any subject into the six sections below. When generating each
+monthly/topical summary, the model **only outputs sections that actually contain content for that
+month/batch; a section with no relevant content is simply omitted** — no padding.
 
-| 板块 | 含义 | 应放入的内容示例 |
+| Section | Meaning | Example content to include |
 |---|---|---|
-| **单词词汇** | 生词、词组、固定搭配 | 按主题分组的 vocab 表、近义词辨析、易混词 |
-| **语法** | 语法点、句型、规则 | 时态、格、连词、从句、被动态、介词搭配等，附例句 |
-| **听** (Listening) | 听力相关 | 听力高频词、连读弱读、常考场景、精听要点 |
-| **说** (Speaking) | 口语相关 | 口语句型、话题语料、常见问答模板、流利度要点 |
-| **读** (Reading) | 阅读相关 | 阅读策略、长难句、题型技巧、高频题材词汇 |
-| **写** (Writing) | 写作相关 | 写作模板、论证结构、万能句型、常见扣分点 |
+| **Vocabulary** | Words, phrases, collocations | Themed vocab tables, synonym distinctions, easily-confused words |
+| **Grammar** | Grammar points, sentence patterns, rules | Tenses, cases, conjunctions, clauses, passive voice, preposition usage, with example sentences |
+| **Listening** | Listening-related | High-frequency listening words, liaison/reduction, common scenarios, intensive-listening tips |
+| **Speaking** | Speaking-related | Spoken patterns, topic material, common Q&A templates, fluency tips |
+| **Reading** | Reading-related | Reading strategies, long/complex sentences, question-type techniques, high-frequency topic vocab |
+| **Writing** | Writing-related | Writing templates, argument structure, universal sentence patterns, common point-deduction traps |
 
-## 智能解析规则
-- 逐份阅读解析后的 Markdown，判断它命中哪些板块。
-- 一份笔记可能跨多个板块（如既练口语又练写作），允许拆分到对应板块。
-- **某板块在该月/该批中无任何内容 → 该板块整段不生成。**
-- 板块顺序固定为：单词词汇 → 语法 → 听 → 说 → 读 → 写。
+## Smart-parsing rules
+- Read each parsed Markdown and decide which sections it hits.
+- One note may span multiple sections (e.g. both speaking and writing practice) — split into the corresponding sections.
+- **A section with zero content this month/batch → that whole section is not generated.**
+- Section order is fixed: Vocabulary → Grammar → Listening → Speaking → Reading → Writing.
 
-## ⚠️ 易错标注约定
-笔记原文里的错误（拼写、变位、搭配、主谓一致、格错误等）应在对应板块下用
-`> ⚠️ 易错：<错误原文> → <正确形式> (<原因>)` 引用块标出。这是备考总结最有价值的部分，默认开启。
+## ⚠️ Common-mistake annotation convention
+Errors in the original notes (spelling, conjugation, collocation, subject-verb agreement, case errors, etc.)
+should be marked under the relevant section with a blockquote:
+`> ⚠️ Common mistake: <wrong original> → <correct form> (<reason>)`. This is the most valuable part of an
+exam-prep summary and is on by default.
 
-## 月度聚合规则
-- 文件名含 `x.xx`（如 `7.14`、`8.2`）的笔记，按月份归组：所有 `7.xx` → 7 月总结，
-  所有 `8.xx` → 8 月总结，以此类推。
-- 文件名**无日期**的通用素材（如「代词总结表」「口语语料」），默认**单独产出一份
-  《基础素材提炼》文档**，不硬塞进某个月；也可由用户决定编入某月或两者都要。
-- 某月文件数较多（>8 份）或单份超大时，可先按主题拆成多批，最后再合并为该月一份大文档。
+## Month-aggregation rules
+- Notes whose filename contains `x.xx` (e.g. `7.14`, `8.2`) are grouped by month: all `7.xx` → July summary,
+  all `8.xx` → August summary, and so on.
+- Undated general material (e.g. "Pronoun Summary Table", "Speaking Corpus") is by default produced as a
+  separate **Core Material Compilation** document, not forced into a month; the user may instead fold it
+  into a month or keep both.
+- If a month has many files (>8) or one file is very large, split into topical batches first, then merge
+  into one big monthly document at the end.

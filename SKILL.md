@@ -8,94 +8,124 @@ agent_created: true
 
 ## Overview
 
-把一堆零散的学习笔记（Word / PDF / 图片 / PPT，可能有几十份）整理成**按月归档、按板块分类**
-的考前总结 Word 文档。整条流水线只用免费本地工具，不依赖任何付费 API 或外部连接器。
+Turn a pile of scattered study notes (Word / PDF / images / PPT, possibly dozens of files) into
+**per-month, section-classified** exam-prep summary Word documents. The whole pipeline uses only
+free local tools — no paid API or external connector required.
 
-- 输入：一个本地文件夹，里面是用户的笔记原文件（`.docx` / `.doc` / `.pdf` / 图片 / `.pptx`）。
-- 处理：① 统一解析成 Markdown → ② 按月份（`x.xx` 文件名）聚合 → ③ 按六板块智能分类 →
-  ④ 用 `scripts/build_docx.py`（python-docx）**自动**渲染成排版好的 `.docx`。
-- 输出：`final/{月份}笔记总结.docx`，以及无日期素材的 `final/{科目}基础素材提炼.docx`。
+- **Input**: a local folder containing the user's original note files (`.docx` / `.doc` / `.pdf` / images / `.pptx`).
+- **Processing**: ① parse everything into Markdown (**cross-platform, no longer macOS-dependent**) →
+  ② aggregate by month (filename `x.xx`) → ③ intelligently classify into six sections →
+  ④ render into a formatted `.docx` with **scripts/render_docx.py (pure python-docx, zero WorkBuddy dependency)**.
+- **Output**: `final/{Month} Notes Summary.docx`, plus `final/{Subject} Core Material Compilation.docx`
+  for undated general material.
 
 ## When To Use
 
-- 用户说"把我的笔记整理成总结 / 考前复习文档 / 月度总结"。
-- 用户有一堆 `.docx`/`.pdf`/图片/PPT 笔记，想合并、归类、去重。
-- 用户备考、复习，需要按词汇/语法/听说读写组织材料。
-- 触发关键词：笔记总结、复习资料、考前整理、月度归档、把文档归类。
+- The user says "organize my notes into a summary / exam-prep review doc / monthly digest".
+- The user has a bunch of `.docx`/`.pdf`/image/PPT notes they want merged, classified, and de-duplicated.
+- The user is preparing for an exam and needs material organized by vocabulary/grammar/listening-speaking-reading-writing.
+- Trigger keywords: notes summary, review materials, exam-prep organization, monthly archive, classify documents.
 
 ## Pipeline
 
-### Step 0 — 确认参数
-向用户确认（或读取记忆）：① 笔记源文件夹路径；② 科目名（如"德语 B1"）；
-③ 是否已有无日期素材的归宿偏好。源文件夹**只读取/解析，绝不移动、重命名、删除原文件**。
+### Step 0 — Confirm parameters
+Confirm with the user (or read memory): ① path to the notes source folder; ② subject name (e.g. "German B1");
+③ preference for where undated material should go. The source folder is **only read/parsed — never moved,
+renamed, or deleted**.
 
-### Step 1 — 解析（scripts/parse_notes.py）
-运行统一解析脚本，把源文件夹所有支持的格式转成 Markdown：
+### Step 1 — Parse (scripts/parse_notes.py)
+Run the unified parser to convert all supported formats in the source folder into Markdown:
 ```bash
-python3 scripts/parse_notes.py --source "源文件夹" --out "工作区/parsed" --log "工作区/parsed/processed.log"
+python3 scripts/parse_notes.py --source "source-folder" --out "workspace/parsed" --log "workspace/parsed/processed.log"
 ```
-- 脚本按扩展名分流：`.docx`→python-docx，`.doc`→macOS textutil，`.pdf`文本→pdfplumber，
-  `.pdf`扫描/图片→tesseract OCR，`.pptx`→python-pptx，图片→OCR（可选另存 PDF）。
-- 用 `processed.log` 记录已处理文件，**重跑不会重复解析**；缺失某引擎时跳过并提示，装好后可重试。
-- 超大文件自动分块为 `_part1.md / _part2.md`。
+- The script dispatches by extension: `.docx`→python-docx, `.doc`→cross-platform fallback chain
+  (convert to `.docx` first via macOS `textutil` / Windows Word COM / LibreOffice, then read with
+  python-docx to **preserve tables**; text-only fallback when docx conversion is unavailable),
+  `.pdf` text→pdfplumber,
+  `.pdf` scanned/images→tesseract OCR (scanned PDFs rendered via PyMuPDF, no poppler needed),
+  `.pptx`→python-pptx, `.ppt`→LibreOffice/textutil, images→OCR.
+- `processed.log` records processed files, so **re-runs never re-parse**; if an engine is missing the file
+  is skipped with a hint and retried automatically once the engine is installed.
+- Oversized files are auto-split into `_part1.md / _part2.md`.
 
-### Step 2 — 阅读与分类
-读取 `parsed/*.md`，按 `references/section_guide.md` 的六板块规则判断每份笔记命中的板块，
-并标记原文中的错误用于 ⚠️ 易错标注。
+### Step 2 — Read and classify
+Read `parsed/*.md`, decide which sections each note hits per `references/section_guide.md`,
+and flag original errors for the ⚠️ Common-mistake annotations.
 
-### Step 3 — 生成总结（references/summary_prompt.md）
-按 `references/summary_prompt.md` 的模板：
-- 把同月份（`x.xx` → 对应月）的文件合并为一份 Markdown 总结。
-- 按"单词词汇 → 语法 → 听 → 说 → 读 → 写"组织，**无内容的板块整段省略**。
-- 抓原文错误做 ⚠️ 易错标注。
-- 无日期的通用素材单独成《基础素材提炼》文档（除非用户指定编入某月）。
+### Step 3 — Generate summary (references/summary_prompt.md)
+Follow the template in `references/summary_prompt.md`:
+- Merge files of the same month (`x.xx` → corresponding month) into one Markdown summary.
+- Organize as "Vocabulary → Grammar → Listening → Speaking → Reading → Writing",
+  **omitting any section with no content**.
+- Capture original errors as ⚠️ Common-mistake annotations.
+- Undated general material becomes its own "Core Material Compilation" doc (unless the user asks to fold it into a month).
 
-### Step 4 — 渲染 Word（自动，python-docx，不依赖 WorkBuddy）
-Step 3 产出结构化 Markdown 后，**AI 直接执行**下面的命令把它渲染成 `.docx`，
-用户无需敲任何命令：
+### Step 4 — Render Word (pure python-docx, no external dependency)
+Feed the Step 3 Markdown to **scripts/render_docx.py** to render the `.docx`,
+output `final/{Month} Notes Summary.docx`. This script uses the open-source `python-docx` library,
+has no dependency on WorkBuddy's built-in skill, and behaves identically on Windows / macOS / Linux.
 ```bash
-python3 scripts/build_docx.py \
-  --input  "工作区/summaries/{月份}.md" \
-  --output "工作区/final/{月份}笔记总结.docx"
+python3 scripts/render_docx.py "summaries/August Notes Summary.md" -o "final/August Notes Summary.docx"
 ```
-- `build_docx.py` 用 **python-docx** 渲染：H1→标题、H2/H3→标题样式、列表/表格/引用块、
-  `**粗体**`/`*斜体*`/`` `代码` `` 内联格式；**⚠️ 易错小节整段标黄高亮**。
-- **不再依赖 WorkBuddy 内置 tencent-docx**——只要有 Python + python-docx，任何 AI 工具
-  （WorkBuddy / Cursor / Claude Code 等）跑完分类都能自动出 Word。
-- 若用户环境里 WorkBuddy 的 tencent-docx 可用且想要更精美排版，可改走 tencent-docx；
-  默认走 build_docx.py 以保证可移植。
+- Formatting rules are implemented inside the script, matching `references/section_guide.md`:
+  six-section heading colors, vocabulary tables (header shading), ⚠️ common-mistake cards with light-red
+  shading, metadata box with light-blue shading, page numbers in the footer.
+- Undated material's "Core Material Compilation" is rendered the same way:
+  `python3 scripts/render_docx.py "summaries/Core Material Compilation.md" -o "final/German B1 Core Material Compilation.docx"`.
 
-### Step 5 — 记录与交付
-- 更新项目的 `processed.log`（脚本自动完成）与记忆（哪些月已生成、哪些待补）。
-- 把生成的 `.docx` 用 present_files 展示给用户。
+### Step 5 — Record and deliver
+- Update the project's `processed.log` (done automatically by the script) and memory
+  (which months are generated, which are pending).
+- Present the generated `.docx` to the user via present_files.
 
 ## Parameters
 
-| 参数 | 说明 | 默认 |
+| Parameter | Description | Default |
 |---|---|---|
-| 源文件夹 | 用户笔记原文件所在目录（绝对路径） | 必填 |
-| 科目名 | 如"德语 B1"，用于标题与提炼文档命名 | 必填 |
-| 工作区 | parsed/ summaries/ final/ 存放处 | 源文件夹同级或指定 |
-| 无日期素材归宿 | 单独提炼 / 编入某月 / 两者都要 | 默认单独提炼 |
+| Source folder | Directory of the user's original note files (absolute path) | Required |
+| Subject name | e.g. "German B1", used for titles and compilation doc naming | Required |
+| Workspace | Where parsed/ summaries/ final/ live | Sibling of source folder or specified |
+| Undated material destination | Separate compilation / fold into a month / both | Separate compilation by default |
 
-## Prerequisites（全部免费）
+## Prerequisites (all free, cross-platform, **zero-manual**)
 
-脚本所需的 Python 库（装到运行 Python 的环境即可）：
-```bash
-pip install python-docx pdfplumber python-pptx img2pdf pytesseract
-```
-- `.doc` / 老 `.ppt` 解析依赖 **macOS 自带 textutil**（仅 macOS；其他平台请先转成 .docx/.pptx）。
-- **图片 / 扫描 PDF 的 OCR** 需要系统安装 `tesseract` + `poppler`：
-  `brew install tesseract poppler`（无 brew 时见 tesseract 官网下载安装包）。
-  缺此二者时，图片/扫描 PDF 会被跳过并提示，其余格式不受影响。
-- 最终 `.docx` 渲染用 `scripts/build_docx.py`（python-docx），**不依赖 WorkBuddy 内置 skill**，
-  任何能跑 Python 的 AI 工具都能自动出 Word。
+This skill is **zero-manual to initialize**: on first run the script auto-installs whatever environment is
+missing, so the end user usually needs to install nothing themselves.
 
-若某库缺失，脚本运行时会打印明确的 `pip install` 提示，不会静默失败。
+- **Python dependencies: auto-installed.** At startup the script detects missing libraries
+  (`python-docx / pdfplumber / python-pptx / img2pdf / pytesseract / pillow / pymupdf / [pywin32 on Windows] / pdf2image`)
+  and `pip install`s them automatically (manifest in `requirements.txt`). You can also pre-install manually:
+  ```bash
+  pip install -r requirements.txt
+  ```
+  Offline environments can set `NOTES_SKIP_DEP_INSTALL=1` to disable auto-install.
+- **OCR engine `tesseract`: auto-installed when missing.** If the script finds no tesseract, it calls the
+  platform's native package manager to install it and re-detects: Windows→`winget install UB-Mannheim.TesseractOCR`;
+  macOS→`brew install tesseract` (Linux/apt needs sudo and prints a manual prompt). You can also run
+  `winget install UB-Mannheim.TesseractOCR` manually. Set `NOTES_SKIP_TESSERACT_INSTALL=1` to disable.
+  Note: for a subject like German B1 where notes are all text-based, OCR is never triggered; OCR only applies to scans/images.
+- **`.doc` / legacy `.ppt` parsing (cross-platform, table-preserving)**: the script converts `.doc` to
+  `.docx` with the best available engine and reads it via python-docx, so **tables are preserved on every
+  platform** (no macOS-only text flattening). Engine order: 1) macOS built-in `textutil` (`-convert docx`,
+  plain-text fallback if that fails); 2) Windows **Microsoft Word** (`pywin32`, auto-installed) via COM;
+  3) **LibreOffice** (soffice / libreoffice); 4) Linux `antiword` (text-only). If none are available it
+  prints a clear install hint; or you can "Save As .docx" in Word/WPS before feeding.
+- **Scanned PDF rendering uses pure-pip PyMuPDF (`pymupdf`), no poppler needed**; the poppler route is kept
+  as an option (`brew install poppler` / `apt install poppler-utils` + `pdf2image`).
+- **OCR language packs auto-download**: default `deu+eng` (German+English, fits German study); a missing pack
+  is **auto-downloaded from GitHub on first run** to `~/.notes_ocr_tessdata`. Override with
+  `NOTES_OCR_LANG=eng` to recognize English only, etc.
+- **Final `.docx` rendering uses open-source `python-docx`** (in `requirements.txt`), done by
+  `scripts/render_docx.py`, **zero built-in WorkBuddy skill dependency**, fully local and cross-platform.
+
+If the environment is still unusable, the script prints a clear self-check list and install hints — it never fails silently.
 
 ## Notes
 
-- **只读取，不改动原文件**：解析、总结全程在副本/派生文件上进行，桌面/源文件夹原文件保持原样。
-- **增量友好**：`processed.log` 保证"扔一篇理解一篇、断点续跑"，适合长期累积的笔记。
-- **科目无关**：德语 B1 只是示例；换成英语、考研、任何科目，只需改科目名与板块权重。
-- **扫描/手写图片质量**决定 OCR 效果；清晰打印体最佳，潦草手写可能需人工校对。
+- **Read-only, never modify originals**: parsing and summarizing happen on copies/derived files; the source
+  folder's originals stay untouched.
+- **Incremental-friendly**: `processed.log` guarantees "drop one, parse one, resume on interruption", ideal for
+  long-accumulated notes.
+- **Subject-agnostic**: German B1 is just an example; swap in English, grad-school exams, any subject by
+  changing the subject name and section weighting.
+- **Scan/handwriting image quality** determines OCR quality; clean print is best, sloppy handwriting may need human proofreading.

@@ -1,12 +1,14 @@
-# study-notes-summarizer — Python 依赖
-# 安装：pip install -r requirements.txt
-python-docx>=1.0.0
-pdfplumber>=0.11.0
-python-pptx>=0.6.23
-img2pdf>=0.5.1
-pytesseract>=0.3.10
-# 另需系统级（非 pip）：
-#   - macOS .doc/.ppt 解析：系统自带 textutil（仅 macOS）
-#   - 图片/扫描 PDF 的 OCR：tesseract + poppler
-#     macOS: brew install tesseract poppler
-#     Windows: winget install tesseract / 见 tesseract 官网
+# study-notes-summarizer — Python dependencies
+# On first run the script auto-installs any missing packages (zero-manual).
+# To pre-install manually:  pip install -r requirements.txt
+python-docx
+pdfplumber
+python-pptx
+img2pdf
+pytesseract
+pillow
+pymupdf
+pdf2image
+# pywin32: Windows-only (used by .doc via Word COM). The script auto-installs it
+#          on Windows at first run, so it is intentionally NOT listed here.
+#          Do not install on macOS / Linux (no matching package, and not needed).

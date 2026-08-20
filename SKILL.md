@@ -1,6 +1,6 @@
 ---
 name: study-notes-summarizer
-description: "This skill turns a folder of mixed-format study notes (Word docx or doc, PDF text or scanned, images, PowerPoint pptx) into organized, per-month summary Word documents. Notes are classified into six smart sections: vocabulary, grammar, listening, speaking, reading, writing. A section is omitted when the source notes contain nothing for it. Use this skill when a user wants to consolidate many scattered notes into clean revision summaries, especially before an exam. Subject-agnostic (language, exam prep, coursework). All parsing uses free local tools; no paid API required."
+description: "This skill turns a folder of mixed-format study notes (Word docx or doc, PDF text or scanned, images, PowerPoint pptx, Excel xlsx, audio/video recordings, and zip/rar archives containing nested notes) into organized, per-month summary Word documents. Audio and video (lecture recordings, etc.) are transcribed to text via local, free Whisper speech-to-text. Notes are classified into six smart sections: vocabulary, grammar, listening, speaking, reading, writing. A section is omitted when the source notes contain nothing for it. Use this skill when a user wants to consolidate many scattered notes — including recordings — into clean revision summaries, especially before an exam. Subject-agnostic (language, exam prep, coursework). All parsing uses free local tools; no paid API required."
 agent_created: true
 ---
 
@@ -12,7 +12,7 @@ Turn a pile of scattered study notes (Word / PDF / images / PPT, possibly dozens
 **per-month, section-classified** exam-prep summary Word documents. The whole pipeline uses only
 free local tools — no paid API or external connector required.
 
-- **Input**: a local folder containing the user's original note files (`.docx` / `.doc` / `.pdf` / images / `.pptx`).
+- **Input**: a local folder containing the user's original note files (`.docx` / `.doc` / `.pdf` / images / `.pptx` / `.xlsx` / audio+video recordings / `.zip` / `.rar`).
 - **Processing**: ① parse everything into Markdown (**cross-platform, no longer macOS-dependent**) →
   ② aggregate by month (filename `x.xx`) → ③ intelligently classify into six sections →
   ④ render into a formatted `.docx` with **scripts/render_docx.py (pure python-docx, zero WorkBuddy dependency)**.
@@ -43,7 +43,12 @@ python3 scripts/parse_notes.py --source "source-folder" --out "workspace/parsed"
   python-docx to **preserve tables**; text-only fallback when docx conversion is unavailable),
   `.pdf` text→pdfplumber,
   `.pdf` scanned/images→tesseract OCR (scanned PDFs rendered via PyMuPDF, no poppler needed),
-  `.pptx`→python-pptx, `.ppt`→LibreOffice/textutil, images→OCR.
+  `.pdf` watermark-overlay→auto-detected (text layer is mostly repeated header/watermark lines while the
+  real content lives in page images, e.g. slide decks exported to PDF) and the whole file is re-OCR'd,
+  `.pptx`→python-pptx, `.ppt`→LibreOffice/textutil, `.xlsx`→openpyxl (each sheet → Markdown table),
+  audio/video (`.mp3`/`.m4a`/`.wav`/`.flac`/`.ogg`/`.aac`/`.mp4`/`.mov`/...)→local Whisper speech-to-text
+  (faster-whisper; model auto-downloaded, language auto-detected),
+  `.zip`/`.rar`→auto-extract and recurse into nested notes (PDF/DOCX/.../audio), images→OCR.
 - `processed.log` records processed files, so **re-runs never re-parse**; if an engine is missing the file
   is skipped with a hint and retried automatically once the engine is installed.
 - Oversized files are auto-split into `_part1.md / _part2.md`.
@@ -93,7 +98,7 @@ This skill is **zero-manual to initialize**: on first run the script auto-instal
 missing, so the end user usually needs to install nothing themselves.
 
 - **Python dependencies: auto-installed.** At startup the script detects missing libraries
-  (`python-docx / pdfplumber / python-pptx / img2pdf / pytesseract / pillow / pymupdf / [pywin32 on Windows] / pdf2image`)
+  (`python-docx / pdfplumber / python-pptx / img2pdf / pytesseract / pillow / pymupdf / openpyxl / rarfile / [pywin32 on Windows] / pdf2image`)
   and `pip install`s them automatically (manifest in `requirements.txt`). You can also pre-install manually:
   ```bash
   pip install -r requirements.txt
@@ -103,7 +108,7 @@ missing, so the end user usually needs to install nothing themselves.
   platform's native package manager to install it and re-detects: Windows→`winget install UB-Mannheim.TesseractOCR`;
   macOS→`brew install tesseract` (Linux/apt needs sudo and prints a manual prompt). You can also run
   `winget install UB-Mannheim.TesseractOCR` manually. Set `NOTES_SKIP_TESSERACT_INSTALL=1` to disable.
-  Note: for a subject like German B1 where notes are all text-based, OCR is never triggered; OCR only applies to scans/images.
+  Note: for a subject like German B1 where notes are all text-based, OCR is never triggered; OCR only applies to scans, photos, and watermark-overlay slide-deck PDFs.
 - **`.doc` / legacy `.ppt` parsing (cross-platform, table-preserving)**: the script converts `.doc` to
   `.docx` with the best available engine and reads it via python-docx, so **tables are preserved on every
   platform** (no macOS-only text flattening). Engine order: 1) macOS built-in `textutil` (`-convert docx`,
@@ -112,9 +117,15 @@ missing, so the end user usually needs to install nothing themselves.
   prints a clear install hint; or you can "Save As .docx" in Word/WPS before feeding.
 - **Scanned PDF rendering uses pure-pip PyMuPDF (`pymupdf`), no poppler needed**; the poppler route is kept
   as an option (`brew install poppler` / `apt install poppler-utils` + `pdf2image`).
-- **OCR language packs auto-download**: default `deu+eng` (German+English, fits German study); a missing pack
+- **OCR language packs auto-download**: default `chi_sim+deu+eng` (Chinese+German+English, subject-agnostic); a missing pack
   is **auto-downloaded from GitHub on first run** to `~/.notes_ocr_tessdata`. Override with
-  `NOTES_OCR_LANG=eng` to recognize English only, etc.
+  `NOTES_OCR_LANG=eng` to recognize English only, etc. Install all packs offline with `brew install tesseract-lang` (macOS).
+- **Speech-to-text for audio/video recordings (zero cost, fully local)**: `.mp3`/`.m4a`/`.wav`/`.flac`/`.ogg`/`.aac`
+  and video containers (`.mp4`/`.mov`/`.webm`/`.m4v`) are transcribed with **faster-whisper** (open-source, runs on
+  CPU, no cloud, no paid API). Audio decoding uses **PyAV**, which **bundles its own ffmpeg**, so no separate
+  ffmpeg install is needed. The Whisper model is **auto-downloaded from HuggingFace on first use** and cached;
+  default model is `small` (good multilingual/Chinese accuracy). Tune with `NOTES_WHISPER_MODEL=base` (faster, lighter)
+  or `medium` (best accuracy), and `NOTES_WHISPER_LANG=zh` (or `en`) to force a language instead of auto-detect.
 - **Final `.docx` rendering uses open-source `python-docx`** (in `requirements.txt`), done by
   `scripts/render_docx.py`, **zero built-in WorkBuddy skill dependency**, fully local and cross-platform.
 

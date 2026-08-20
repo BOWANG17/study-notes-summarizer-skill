@@ -9,6 +9,9 @@ pytesseract
 pillow
 pymupdf
 pdf2image
+rarfile
+openpyxl
+faster-whisper
 # pywin32: Windows-only (used by .doc via Word COM). The script auto-installs it
 #          on Windows at first run, so it is intentionally NOT listed here.
 #          Do not install on macOS / Linux (no matching package, and not needed).

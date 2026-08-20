@@ -15,10 +15,19 @@ Supported formats and their free engines:
                        4) Linux antiword
                        if none available, print a clear install hint (or Save As .docx manually)
   .pdf (text)      -> pdfplumber
-  .pdf (scanned)   -> PyMuPDF render + tesseract OCR (deu+eng, language pack auto-download)
-  .png/.jpg/...    -> tesseract OCR (deu+eng, optionally Save As PDF via img2pdf)
+  .pdf (scanned)   -> PyMuPDF render + tesseract OCR (chi_sim+deu+eng, language pack auto-download)
+  .pdf (watermark) -> text layer that is mostly repeated header/watermark lines
+                      (real content in page images) is auto-detected and the
+                      whole file is re-OCR'd; requires the OCR engine above.
+  .png/.jpg/...    -> tesseract OCR (chi_sim+deu+eng, optionally Save As PDF via img2pdf)
   .pptx            -> python-pptx
   .ppt (legacy)    -> cross-platform fallback chain: textutil -> LibreOffice to pptx -> hint
+  .xlsx            -> openpyxl (each sheet rendered as a Markdown table)
+  .mp3/.m4a/.wav/.flac/.ogg/.aac and video containers (.mp4/.mov/.webm/.m4v)
+                  -> Whisper speech-to-text (faster-whisper, local + free, language
+                     auto-detected; model auto-downloaded on first use). Audio decoding
+                     uses PyAV, which bundles its own ffmpeg — no system install needed.
+  .zip / .rar      -> auto-extract and recurse into contents (PDF/DOCX/.../audio inside)
 
 When an engine is missing, the script prints a clear install hint and skips that file
 (not written to processed.log, so it auto-retries next run once the engine is installed)
@@ -110,7 +119,8 @@ def _bootstrap_deps():
     required = {
         "docx": "python-docx", "pptx": "python-pptx", "pdfplumber": "pdfplumber",
         "pytesseract": "pytesseract", "PIL": "pillow", "fitz": "pymupdf",
-        "img2pdf": "img2pdf",
+        "img2pdf": "img2pdf", "rarfile": "rarfile", "openpyxl": "openpyxl",
+        "faster_whisper": "faster-whisper",
     }
     # pywin32 is Windows-only (.doc via Word COM); macOS uses native textutil, Linux uses antiword/LibreOffice.
     if sys.platform.startswith("win"):
@@ -188,6 +198,7 @@ PDF2IMAGE    = py_has("pdf2image")       # pdfplumber scanned-OCR helper (popple
 PIL_OK       = py_has("PIL")             # image OCR
 PYMUPDF      = py_has("fitz")            # PyMuPDF, scanned-PDF rendering (replaces poppler, pure pip)
 WIN32COM     = py_has("win32com")        # Windows Word COM parses .doc
+OPENPYXL     = py_has("openpyxl")        # openpyxl parses .xlsx
 SOFFICE      = has("soffice") or has("libreoffice")
 ANTIWORD     = has("antiword")           # common Linux .doc text extractor
 
@@ -197,6 +208,11 @@ _ensure_tesseract()   # zero-manual: auto-install tesseract per platform when mi
 OCR_IMG_OK  = TESSERACT_BIN and PYTESSERACT and PIL_OK          # image OCR
 OCR_PDF_OK  = OCR_IMG_OK and (PYMUPDF or (PDFTOPPM_BIN and PDF2IMAGE))  # scanned-PDF OCR (PyMuPDF preferred)
 
+# Speech-to-text (Whisper) availability — faster-whisper decodes audio via PyAV,
+# which bundles its own ffmpeg, so no system ffmpeg binary is required.
+WHISPER_OK  = py_has("faster_whisper")       # local, free speech-to-text
+AUDIO_OK    = WHISPER_OK                      # PyAV (ffmpeg) ships with faster-whisper
+
 # ---------- dispatch table ----------
 EXT_DISPATCH = {
     ".docx": "parse_docx",
@@ -204,10 +220,14 @@ EXT_DISPATCH = {
     ".pdf": "parse_pdf",
     ".pptx": "parse_pptx",
     ".ppt": "parse_ppt",
+    ".xlsx": "parse_xlsx",
 }
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".tif", ".webp"}
+ARCHIVE_EXTS = {".zip", ".rar"}   # auto-extract and recurse into contents
+AUDIO_EXTS = {".mp3", ".m4a", ".wav", ".flac", ".ogg", ".aac", ".wma",
+              ".mp4", ".mov", ".webm", ".m4v"}   # speech-to-text via Whisper
 
-SUPPORTED = set(EXT_DISPATCH) | IMAGE_EXTS
+SUPPORTED = set(EXT_DISPATCH) | IMAGE_EXTS | ARCHIVE_EXTS | AUDIO_EXTS
 
 
 # ---------- per-format parsers (lazy-loaded; prompt if missing) ----------
@@ -344,11 +364,34 @@ def _doc_via_antiword(path: Path):
     return r.stdout
 
 
+def _is_watermark_overlay(page_text: dict) -> bool:
+    """Detect PDFs whose text layer is dominated by repeated header/watermark
+    lines while the real content lives in page images. Typical of slide-deck
+    PDFs that stamp a course-name/logo watermark on every page — pdfplumber
+    extracts plenty of chars, but they are pure noise and the actual content
+    is silently lost. Returns True when repeated lines dominate (>40% of all
+    lines appear 3+ times) or almost no unique content lines remain."""
+    lines = []
+    for t in page_text.values():
+        lines.extend(l.strip() for l in t.splitlines() if l.strip())
+    if not lines:
+        return False
+    counts = {}
+    for l in lines:
+        counts[l] = counts.get(l, 0) + 1
+    repeated = sum(n for n in counts.values() if n >= 3)
+    unique_content = sum(1 for l, n in counts.items() if n < 3 and len(l) >= 4)
+    return (repeated / len(lines)) > 0.4 or unique_content < 15
+
+
 def parse_pdf(path: Path, out_dir: Path):
     """Extract text page-by-page (Bug 4/7): a page is OCR'd only when it has
     little native text (< 30 chars), so mixed PDFs keep their text pages and
     get scanned pages OCR'd instead of being silently dropped; short text PDFs
-    are never mis-detected as scans."""
+    are never mis-detected as scans.
+    Watermark-overlay fix: when every page has 30+ chars but the text layer is
+    mostly repeated watermarks, the whole file is re-OCR'd because trusting the
+    noise would drop the real (image-based) content."""
     import pdfplumber
     page_text = {}
     need_ocr = []
@@ -358,6 +401,14 @@ def parse_pdf(path: Path, out_dir: Path):
             page_text[i] = t
             if len(t.strip()) < 30:
                 need_ocr.append(i)
+
+    # Watermark-overlay fix: all pages have text, but it is mostly repeated
+    # header/watermark noise while the real content sits in page images.
+    if not need_ocr and len(page_text) >= 3 and _is_watermark_overlay(page_text):
+        print(f"ℹ️ `{path.name}`: text layer looks like repeated watermarks "
+              f"(real content is in page images) — re-OCR'ing the whole file.",
+              file=sys.stderr)
+        need_ocr = sorted(page_text)
 
     ocr_result = {}
     all_scanned = len(page_text) > 0 and len(need_ocr) == len(page_text)
@@ -375,7 +426,8 @@ def parse_pdf(path: Path, out_dir: Path):
             if not (PYMUPDF or (PDFTOPPM_BIN and PDF2IMAGE)): missing.append("scanned-PDF renderer (PyMuPDF or poppler)")
             if not PIL_OK:        missing.append("Pillow (PIL)")
             raise RuntimeError(
-                f"PDF `{path.name}` appears to be a scan and needs OCR, but is missing: {', '.join(missing)}."
+                f"PDF `{path.name}` looks like a scan or image-based slide deck "
+                f"(little real text extractable) and needs OCR, but is missing: {', '.join(missing)}."
                 f"\n  Recommended (pure pip, no system binary): `pip install pytesseract pymupdf pillow`."
                 f"\n  Or the poppler route: macOS `brew install tesseract poppler`;"
                 f"Linux `apt install tesseract-ocr poppler-utils`;"
@@ -433,10 +485,35 @@ def _writable(d):
 
 
 def _default_tessdata_dir():
+    """Locate the tesseract language-pack directory (tessdata).
+
+    Order of preference:
+      1. `tesseract --print-tessdata-dir` output (authoritative when supported)
+      2. <tesseract dir>/tessdata  (portable/Windows layouts)
+      3. common Homebrew layouts: <prefix>/share/tessdata for Intel (/usr/local)
+         and Apple Silicon (/opt/homebrew), where the binary lives in bin/
+    Returns the dir as a str, or None."""
     if TESSERACT_BIN:
-        d = os.path.join(os.path.dirname(TESSERACT_BIN), "tessdata")
-        if os.path.isdir(d):
-            return d
+        try:
+            out = subprocess.run(
+                [TESSERACT_BIN, "--print-tessdata-dir"],
+                capture_output=True, text=True, timeout=15,
+            )
+            d = (out.stdout or "").strip()
+            if d and os.path.isdir(d):
+                return d
+        except Exception:
+            pass
+        bdir = os.path.dirname(TESSERACT_BIN)
+        for cand in (
+            os.path.join(bdir, "tessdata"),
+            os.path.join(bdir, "..", "share", "tessdata"),
+            "/usr/local/share/tessdata",
+            "/opt/homebrew/share/tessdata",
+        ):
+            cand = os.path.abspath(cand)
+            if os.path.isdir(cand):
+                return cand
     return None
 
 
@@ -477,10 +554,11 @@ def _download_traineddata(lang: str, tdir: str) -> bool:
 
 
 def resolve_ocr_langs():
-    """Resolve NOTES_OCR_LANG (default deu+eng); try to auto-download missing packs, degrade gracefully if a download fails."""
+    """Resolve NOTES_OCR_LANG (default chi_sim+deu+eng, covering Chinese/German/English notes);
+    try to auto-download missing packs, degrade gracefully if a download fails."""
     tdir = _ensure_tessdata_dir()
     os.environ["TESSDATA_PREFIX"] = tdir  # make tesseract use this dir (includes copied default packs)
-    requested = [x.strip() for x in os.environ.get("NOTES_OCR_LANG", "deu+eng").split("+") if x.strip()]
+    requested = [x.strip() for x in os.environ.get("NOTES_OCR_LANG", "chi_sim+deu+eng").split("+") if x.strip()]
     available = []
     for lang in requested:
         if os.path.isfile(os.path.join(tdir, f"{lang}.traineddata")):
@@ -533,19 +611,48 @@ def _pdf_pages_to_images(path: Path, indices=None):
 
 def _ocr_pdf(path: Path, out_dir: Path, page_indices=None):
     """OCR a PDF. `page_indices` is an optional 1-based list of pages to OCR
-    (None = all). Returns dict: page_no -> OCR text."""
+    (None = all). Returns dict: page_no -> OCR text.
+    Streams page-by-page with PyMuPDF (render one page -> OCR -> release) so
+    large image PDFs don't blow up memory; poppler is the fallback path."""
     import pytesseract
     if TESSERACT_BIN:
         pytesseract.pytesseract.tesseract_cmd = TESSERACT_BIN
     lang = resolve_ocr_langs()
-    images = _pdf_pages_to_images(path, indices=page_indices)
-    if not images:
+    result = {}
+    rendered = False
+    # Preferred: PyMuPDF, rendered one page at a time (low memory even for
+    # 100+ page decks)
+    if PYMUPDF:
+        try:
+            import io
+            from PIL import Image
+            import fitz
+            doc = fitz.open(str(path))
+            try:
+                for idx, page in enumerate(doc, 1):
+                    if page_indices and idx not in page_indices:
+                        continue
+                    pix = page.get_pixmap(dpi=200)
+                    if pix.alpha:
+                        pix = fitz.Pixmap(pix, 0)  # strip alpha channel
+                    img = Image.open(io.BytesIO(pix.tobytes("png")))
+                    result[idx] = pytesseract.image_to_string(img, lang=lang)
+                    rendered = True
+            finally:
+                doc.close()
+        except Exception as e:
+            print(f"⚠️ PyMuPDF render failed, falling back to poppler: {e}", file=sys.stderr)
+    # Fallback: pdf2image + poppler
+    if not rendered:
+        images = _pdf_pages_to_images(path, indices=page_indices)
+        if images:
+            for idx, img in images:
+                result[idx] = pytesseract.image_to_string(img, lang=lang)
+                rendered = True
+    if not rendered:
         raise RuntimeError(
             "Scanned PDF needs a rendering engine: install PyMuPDF (`pip install pymupdf`) or poppler (pdftoppm)."
         )
-    result = {}
-    for idx, img in images:
-        result[idx] = pytesseract.image_to_string(img, lang=lang)
     return result
 
 
@@ -582,6 +689,37 @@ def parse_pptx(path: Path):
             if notes:
                 blocks.append(f"(Notes) {notes}")
     return "\n".join(blocks), "python-pptx"
+
+
+def parse_xlsx(path: Path):
+    """Read every sheet of an .xlsx workbook and render each as a Markdown table.
+    Uses openpyxl with data_only=True so formula cells resolve to their cached
+    values. Multi-line cells are flattened (newlines -> spaces) to keep the
+    Markdown table valid; pipe characters are escaped."""
+    import openpyxl
+    wb = openpyxl.load_workbook(str(path), data_only=True)
+    blocks = []
+    for ws in wb.worksheets:
+        blocks.append(f"\n## Sheet: {ws.title}")
+        rows = list(ws.iter_rows(values_only=True))
+        if not rows:
+            blocks.append("(empty sheet)")
+            continue
+        ncols = max((len(r) for r in rows), default=0)
+        if ncols == 0:
+            blocks.append("(no columns)")
+            continue
+        def fmt(c):
+            if c is None:
+                return ""
+            return str(c).replace("\n", " ").replace("\r", " ").replace("|", "\\|").strip()
+        md_rows = []
+        for r in rows:
+            cells = list(r) + [""] * (ncols - len(r))
+            md_rows.append("| " + " | ".join(fmt(c) for c in cells) + " |")
+        sep = "| " + " | ".join(["---"] * ncols) + " |"
+        blocks.append(md_rows[0] + "\n" + sep + "\n" + "\n".join(md_rows[1:]))
+    return "\n".join(blocks), "openpyxl"
 
 
 def parse_ppt(path: Path, out_dir: Path):
@@ -622,6 +760,49 @@ def parse_image(path: Path, out_dir: Path):
     return text, "tesseract OCR", pdf_path
 
 
+def _fmt_time(seconds):
+    """Format seconds as M:SS or H:MM:SS."""
+    seconds = int(round(seconds))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+
+
+def parse_audio(path: Path, out_dir: Path):
+    """Transcribe an audio/video file to text via local Whisper (faster-whisper).
+    Returns (markdown_text, engine_label). The model is auto-downloaded from
+    HuggingFace on first use and cached; language is auto-detected unless
+    NOTES_WHISPER_LANG is set. Audio decoding uses PyAV (bundled ffmpeg), so no
+    system ffmpeg install is required."""
+    if not py_has("faster_whisper"):
+        raise RuntimeError(
+            f"Audio `{path.name}` needs faster-whisper (local, free speech-to-text). "
+            f"Run `pip install faster-whisper` — it bundles PyAV/ffmpeg, no system ffmpeg needed."
+        )
+    import faster_whisper
+    model = os.environ.get("NOTES_WHISPER_MODEL", "small")
+    lang = os.environ.get("NOTES_WHISPER_LANG") or None
+    try:
+        m = faster_whisper.WhisperModel(model, device="cpu")
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to load Whisper model '{model}' (auto-downloaded from HuggingFace on first use; "
+            f"needs internet on first run): {e}"
+        )
+    try:
+        segments, info = m.transcribe(str(path), language=lang, beam_size=5)
+    except Exception as e:
+        raise RuntimeError(f"Whisper transcription of `{path.name}` failed: {e}")
+    lines = [f"> Transcribed with Whisper model `{model}`"
+             + (f", language={lang}" if lang else ", language auto-detected")
+             + f"; duration {_fmt_time(info.duration)}; {len(segments)} segments.\n"]
+    for seg in segments:
+        txt = (seg.text or "").strip()
+        if txt:
+            lines.append(f"[{_fmt_time(seg.start)}] {txt}")
+    return "\n".join(lines), f"Whisper ({model})"
+
+
 # ---------- main flow ----------
 def write_markdown(out_dir: Path, stem: str, raw_text: str, meta: dict, chunk=40000):
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -657,6 +838,7 @@ def report_tools():
         ("python-docx", PYTHON_DOCX),
         ("pdfplumber", PDFPLUMBER),
         ("python-pptx", PYTHON_PPTX),
+        ("openpyxl", OPENPYXL),
         ("img2pdf", IMG2PDF),
         ("pytesseract", PYTESSERACT),
         ("Pillow(PIL)", PIL_OK),
@@ -668,12 +850,136 @@ def report_tools():
         ("Windows Word COM (pywin32)", WIN32COM),
         ("LibreOffice (soffice)", SOFFICE),
         ("antiword", ANTIWORD),
+        ("PyAV / ffmpeg (via faster-whisper)", py_has("av")),
+        ("faster-whisper", WHISPER_OK),
     ]
     print("=== Tool availability self-check ===")
     for name, ok in rows:
         print(f"  [{'✔' if ok else '✘'}] {name}")
     ocr_state = "✔ available" if OCR_PDF_OK else ("partial (image OCR only)" if OCR_IMG_OK else "✘ unavailable")
-    print(f"  >> Overall OCR status: {ocr_state}\n")
+    print(f"  >> Overall OCR status: {ocr_state}")
+    audio_state = "✔ available" if WHISPER_OK else "✘ unavailable (audio/recording files will be skipped)"
+    print(f"  >> Speech-to-text (Whisper) status: {audio_state}\n")
+
+
+def _log_done(log, name, p):
+    """Append a processed-file record (name ⇥ mtime ⇥ size) to processed.log."""
+    try:
+        m = p.stat()
+        with log.open("a", encoding="utf-8") as f:
+            f.write(f"{name}\t{int(m.st_mtime)}\t{m.st_size}\n")
+    except Exception:
+        pass
+
+
+def _unchanged(p, rec):
+    """True if the file's current mtime+size match the recorded processed.log entry."""
+    try:
+        m = p.stat()
+        return rec is not None and rec == (int(m.st_mtime), m.st_size)
+    except Exception:
+        return False
+
+
+def _dispatch_and_write(p, out, out_stem=None):
+    """Parse a single regular (non-archive) file and write its Markdown.
+    Returns True on success, False on failure (engine missing, parse error).
+    Does NOT update processed.log — the caller owns log writes."""
+    ext = p.suffix.lower()
+    try:
+        if ext in IMAGE_EXTS:
+            res = parse_image(p, out)
+            if len(res) == 3:
+                text, engine, pdf_path = res
+                extra = f" (saved PDF: {pdf_path.name})" if pdf_path else ""
+            else:
+                text, engine = res
+                extra = ""
+        elif ext == ".docx":
+            text, engine = parse_docx(p)
+        elif ext == ".doc":
+            text, engine = parse_doc(p, out)
+        elif ext == ".pdf":
+            text, engine = parse_pdf(p, out)
+        elif ext == ".pptx":
+            text, engine = parse_pptx(p)
+        elif ext == ".ppt":
+            text, engine = parse_ppt(p, out)
+        elif ext == ".xlsx":
+            text, engine = parse_xlsx(p)
+        elif ext in AUDIO_EXTS:
+            text, engine = parse_audio(p, out)
+        else:
+            return False
+        out_stem = out_stem or f"{p.stem}{ext}"  # Bug 1: embed ext so same-name/diff-format files don't collide
+        parts = write_markdown(
+            out, out_stem, text,
+            {"title": p.name, "source": str(p), "format": ext, "engine": engine}
+        )
+        label = extra if ext in IMAGE_EXTS else ""
+        print(f"✅ {p.name} -> {', '.join(parts)} [{engine}]{label}")
+        return True
+    except Exception as e:
+        print(f"⚠️ {p.name} skipped: {e}", file=sys.stderr)
+        return False
+
+
+def handle_archive(path, out):
+    """Extract a .zip/.rar archive to a temp dir and recurse into its contents.
+    Each supported inner file is parsed and written as its own Markdown; nested
+    archives are extracted too. Returns the list of inner files successfully
+    parsed. Does NOT write processed.log (the caller logs the archive itself)."""
+    import zipfile
+    import tempfile
+    import shutil
+    archive_stem = path.stem
+    parsed_names = []
+    tmp = Path(tempfile.mkdtemp(prefix=f"notes_arch_{archive_stem}_"))
+    try:
+        try:
+            if path.suffix.lower() == ".zip":
+                with zipfile.ZipFile(str(path)) as z:
+                    z.extractall(str(tmp))
+            elif path.suffix.lower() == ".rar":
+                try:
+                    import rarfile
+                except ImportError:
+                    print(f"⚠️ `{path.name}` is a .rar but `rarfile` is not installed; "
+                          f"run `pip install rarfile` then install a rar tool "
+                          f"(macOS `brew install unar`; Linux `apt install unrar`).", file=sys.stderr)
+                    return parsed_names
+                try:
+                    with rarfile.RarFile(str(path)) as rf:
+                        rf.extractall(str(tmp))
+                except Exception as e:
+                    print(f"⚠️ Failed to extract .rar `{path.name}` (need unrar/unar/bsdtar): {e}",
+                          file=sys.stderr)
+                    return parsed_names
+            else:
+                return parsed_names
+        except Exception as e:
+            print(f"⚠️ Failed to extract archive `{path.name}`: {e}", file=sys.stderr)
+            return parsed_names
+
+        # rglob over extracted contents; ARCHIVE_EXTS included so nested archives recurse.
+        for f in sorted(tmp.rglob("*")):
+            if not f.is_file():
+                continue
+            fext = f.suffix.lower()
+            if fext not in SUPPORTED:
+                continue
+            rel = f.relative_to(tmp)
+            slug = str(rel.with_suffix("")).replace(os.sep, "__")
+            out_stem = f"{archive_stem}__{slug}{fext}"
+            if fext in ARCHIVE_EXTS:
+                # nested archive: recurse (inner out-stem already prefixed)
+                parsed_names.extend(handle_archive(f, out))
+            else:
+                if _dispatch_and_write(f, out, out_stem=out_stem):
+                    parsed_names.append(f"{archive_stem}/{rel}")
+        return parsed_names
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def main():
@@ -721,50 +1027,23 @@ def main():
     parsed, skipped = [], []
     for p in files:
         ext = p.suffix.lower()
-        if not args.force and p.name in done:
-            rec = done[p.name]
-            try:
-                m = p.stat()
-                if rec is None or rec == (int(m.st_mtime), m.st_size):
-                    continue
-            except Exception:
-                continue
-        try:
-            if ext in IMAGE_EXTS:
-                res = parse_image(p, out)
-                if len(res) == 3:
-                    text, engine, pdf_path = res
-                    extra = f" (saved PDF: {pdf_path.name})" if pdf_path else ""
-                else:
-                    text, engine = res
-                    extra = ""
-            elif ext == ".docx":
-                text, engine = parse_docx(p)
-            elif ext == ".doc":
-                text, engine = parse_doc(p, out)
-            elif ext == ".pdf":
-                text, engine = parse_pdf(p, out)
-            elif ext == ".pptx":
-                text, engine = parse_pptx(p)
-            elif ext == ".ppt":
-                text, engine = parse_ppt(p, out)
+        if not args.force and p.name in done and _unchanged(p, done[p.name]):
+            continue
+        if ext in ARCHIVE_EXTS:
+            # Auto-extract the archive and recurse into its contents (zip/rar).
+            inner = handle_archive(p, out)
+            if inner:
+                parsed.extend(inner)
+                _log_done(log, p.name, p)
             else:
-                skipped.append((p.name, "unsupported extension"))
-                continue
-
-            parts = write_markdown(
-                out, f"{p.stem}{ext}", text,  # Bug 1: embed ext so same-name/diff-format files don't collide
-                {"title": p.name, "source": str(p), "format": ext, "engine": engine}
-            )
-            parsed.append((p.name, parts, engine))
-            m = p.stat()
-            with log.open("a", encoding="utf-8") as f:
-                f.write(f"{p.name}\t{int(m.st_mtime)}\t{m.st_size}\n")
-            label = extra if ext in IMAGE_EXTS else ""
-            print(f"✅ {p.name} -> {', '.join(parts)} [{engine}]{label}")
-        except Exception as e:
-            skipped.append((p.name, str(e)))
-            print(f"⚠️ {p.name} skipped: {e}", file=sys.stderr)
+                skipped.append((p.name, "archive empty, extraction failed, or no supported files inside"))
+            continue
+        ok = _dispatch_and_write(p, out)
+        if ok:
+            parsed.append(p.name)
+            _log_done(log, p.name, p)
+        else:
+            skipped.append((p.name, "parse failed / engine missing"))
 
     print(f"\n=== Done ===")
     print(f"Parsed this run: {len(parsed)}; skipped: {len(skipped)}")

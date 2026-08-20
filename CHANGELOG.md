@@ -4,6 +4,29 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- `.zip` / `.rar` archives are now **auto-extracted and recursed into** (nested archives supported); contents are parsed like ordinary files with `归档名__内部相对路径` naming.
+- `.xlsx` spreadsheets are now parsed (each sheet → a Markdown table) via `openpyxl`.
+- **Speech-to-text for audio/video recordings** (`.mp3`/`.m4a`/`.wav`/`.flac`/`.ogg`/`.aac`/`.mp4`/`.mov`/`.webm`/`.m4v`):
+  transcribed locally with **faster-whisper** (free, CPU, no cloud API). Audio decoding uses PyAV, which
+  bundles its own ffmpeg — **no system ffmpeg install needed**. The Whisper model auto-downloads
+  from HuggingFace on first use; configurable via `NOTES_WHISPER_MODEL` (default `small`) and `NOTES_WHISPER_LANG`.
+
+### Fixed
+- **tessdata location on Intel Macs**: `_default_tessdata_dir()` now probes `tesseract --print-tessdata-dir` and the Homebrew `share/tessdata` layouts (`/usr/local` and `/opt/homebrew`), so OCR works when brew installs the binary in `bin/` but language packs in `share/tessdata`.
+- **Watermark-overlay PDFs are now detected and re-OCR'd**: PDFs whose text layer is mostly repeated
+  header/watermark lines (typical of slide decks exported to PDF — the real content lives in page images)
+  were previously mis-detected as "text-extractable" and the real content was silently lost. `parse_pdf`
+  now checks for a watermark-overlay signature (repeated lines > 40% of all lines, or < 15 unique content
+  lines) and re-OCRs the whole file instead of trusting the noise.
+- **Low-memory OCR of large scanned PDFs**: `_ocr_pdf` now streams page-by-page with PyMuPDF (render one
+  page → OCR → release) instead of materializing every page image in memory, so 100+ page decks no longer
+  risk out-of-memory kills (poppler remains the fallback path).
+- Default OCR language is now **`chi_sim+deu+eng`** (Chinese + German + English, subject-agnostic) instead of `deu+eng` — Chinese notes are recognized out of the box.
+- rar install hint updated: Homebrew removed the `unrar` formula, so the message now suggests `brew install unar` (or Linux `apt install unrar`); `rarfile` auto-detects unrar / unar / bsdtar.
+
 ## [1.0.0] - 2026-08-19
 
 ### Highlights
